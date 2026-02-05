@@ -142,30 +142,39 @@ app.post('/api/generate', requireAdmin, async (req, res) => {
 /* ===== 追踪入口 ===== */
 
 app.get('/t/:token', async (req, res) => {
-  const link = await prisma.link.findUnique({
-    where: { token: req.params.token }
-  })
+  try {
+    const token = req.params.token
 
-  if (!link || link.used) {
-    return res.send('链接无效或已使用')
-  }
+    const link = await prisma.link.findUnique({
+      where: { token }
+    })
 
-  await prisma.visit.create({
-    data: {
-      ip: getIp(req),
-      userAgent: req.headers['user-agent'] || 'unknown',
-      linkId: link.id
+    if (!link) {
+      return res.status(404).send('Not Found')
     }
-  })
 
-  await prisma.link.update({
-    where: { id: link.id },
-    data: { used: true }
-  })
+    // 1️⃣ 记录访问（用户无感）
+    await prisma.visit.create({
+      data: {
+        ip: getIp(req),
+        userAgent: req.headers['user-agent'] || 'unknown',
+        linkId: link.id
+      }
+    })
 
-  res.send('访问已记录')
-})
+    // 2️⃣ 标记已使用（如果你要一次性）
+    if (!link.used) {
+      await prisma.link.update({
+        where: { id: link.id },
+        data: { used: true }
+      })
+    }
 
-app.listen(PORT, () => {
-  console.log('Server running on port', PORT)
+    // 3️⃣ 立刻跳转（关键）
+    return res.redirect(302, link.targetUrl)
+
+  } catch (err) {
+    console.error(err)
+    res.status(500).send('Server error')
+  }
 })
