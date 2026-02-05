@@ -3,12 +3,13 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "npx prisma generate && npx prisma migrate deploy && node src/server.js"
+    "start": "npx prisma migrate deploy && node src/server.js"
   },
   "dependencies": {
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
     "@prisma/client": "^5.9.1",
-    "prisma": "^5.9.1"
+    "prisma": "^5.9.1",
+    "cookie-parser": "^1.4.6"
   }
 }
