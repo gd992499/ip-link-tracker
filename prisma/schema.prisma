@@ -7,10 +7,17 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Admin {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique
+  password  String
+  createdAt DateTime @default(now())
+}
+
 model Link {
   id        Int      @id @default(autoincrement())
   token     String   @unique
-  used      Boolean  @default(false)
+  targetUrl String
   createdAt DateTime @default(now())
   visits    Visit[]
 }
@@ -20,6 +27,7 @@ model Visit {
   ip        String
   userAgent String
   createdAt DateTime @default(now())
-  link      Link     @relation(fields: [linkId], references: [id])
-  linkId    Int
+
+  link   Link @relation(fields: [linkId], references: [id])
+  linkId Int
 }
