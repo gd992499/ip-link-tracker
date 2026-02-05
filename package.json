@@ -3,15 +3,11 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "npx prisma migrate deploy && node src/server.js",
-    "postinstall": "npx prisma generate"
+    "start": "node src/server.js"
   },
   "dependencies": {
-    "@prisma/client": "^5.9.0",
     "express": "^4.19.2",
-    "express-rate-limit": "^7.0.0"
-  },
-  "devDependencies": {
-    "prisma": "^5.9.0"
+    "express-rate-limit": "^7.4.0",
+    "@prisma/client": "^5.9.1"
   }
 }
