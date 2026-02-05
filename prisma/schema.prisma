@@ -18,6 +18,7 @@ model Link {
   id        Int      @id @default(autoincrement())
   token     String   @unique
   targetUrl String
+  used Boolean @default(false)
   createdAt DateTime @default(now())
   visits    Visit[]
 }
