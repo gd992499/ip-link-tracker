@@ -1,73 +1,25 @@
 import express from 'express'
-import rateLimit from 'express-rate-limit'
 import crypto from 'crypto'
+import cookieParser from 'cookie-parser'
 import { PrismaClient } from '@prisma/client'
 
 const app = express()
 const prisma = new PrismaClient()
 
 app.use(express.json())
+app.use(cookieParser())
 app.set('trust proxy', true)
-app.get("/", (req, res) => {
-  res.setHeader("Content-Type", "text/html; charset=utf-8")
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="zh-CN">
-    <head>
-      <meta charset="UTF-8" />
-      <title>IP Link Tracker</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    </head>
-    <body>
-      <h1>IP Link Tracker</h1>
-      <p>HTML 首页已加载</p>
-    </body>
-    </html>
-  `)
-})
-app.get("/admin", (req, res) => {
-  res.setHeader("Content-Type", "text/html; charset=utf-8")
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="zh-CN">
-    <head>
-      <meta charset="UTF-8" />
-      <title>后台 - IP Link Tracker</title>
-    </head>
-    <body>
-      <h1>后台管理</h1>
 
-      <button onclick="generate()">生成一次性追踪链接</button>
-
-      <p id="result"></p>
-
-      <script>
-        async function generate() {
-          const res = await fetch('/api/generate', { method: 'POST' })
-          const data = await res.json()
-          document.getElementById('result').innerText = data.url
-        }
-      </script>
-    </body>
-    </html>
-  `)
-})
-app.post("/api/generate", (req, res) => {
-  const token = generateToken()
-  res.json({
-    url: req.protocol + '://' + req.get('host') + '/t/' + token
-  })
-})
 const PORT = process.env.PORT || 3000
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD
 
-/* ---------- 工具 ---------- */
+/* ===== 工具 ===== */
 
-function generateToken() {
+function genToken() {
   return crypto.randomBytes(8).toString('base64url')
 }
 
-function getClientIp(req) {
+function getIp(req) {
   return (
     req.headers['cf-connecting-ip'] ||
     req.headers['x-forwarded-for']?.split(',')[0] ||
@@ -76,144 +28,125 @@ function getClientIp(req) {
   )
 }
 
-function adminAuth(req, res, next) {
-  const auth = req.headers.authorization
-  if (!auth) return res.status(401).send('Unauthorized')
-
-  const [, password] = Buffer.from(auth.split(' ')[1], 'base64')
-    .toString()
-    .split(':')
-
-  if (password !== ADMIN_PASSWORD) {
-    return res.status(403).send('Forbidden')
-  }
-  next()
+function requireAdmin(req, res, next) {
+  if (req.cookies.admin === '1') next()
+  else res.redirect('/login')
 }
 
-/* ---------- 防刷 ---------- */
+/* ===== 首页 ===== */
 
-const limiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 20
+app.get('/', (req, res) => {
+  res.send(`
+<h1>IP Link Tracker</h1>
+<p>系统运行中</p>
+<a href="/admin">进入后台</a>
+`)
 })
 
-/* ---------- 一次性访问链接 ---------- */
+/* ===== 登录 ===== */
 
-app.get('/t/:token', limiter, async (req, res) => {
-  const { token } = req.params
-  const ip = getClientIp(req)
-  const ua = req.headers['user-agent'] || 'unknown'
-
-  try {
-    await prisma.$transaction(async (tx) => {
-      const link = await tx.link.findUnique({ where: { token } })
-      if (!link) throw new Error('USED')
-
-      await tx.visit.create({
-        data: {
-          linkId: link.id,
-          ip,
-          userAgent: ua
-        }
-      })
-
-      // 访问后立即删除
-      await tx.link.delete({ where: { id: link.id } })
-    })
-
-    res.send(`
-      <h2>访问成功</h2>
-      <p>该链接已自动失效</p>
-    `)
-  } catch {
-    res.status(410).send('Link expired or already used')
-  }
+app.get('/login', (req, res) => {
+  res.send(`
+<h2>管理员登录</h2>
+<input id="pwd" type="password"/>
+<button onclick="go()">登录</button>
+<p id="m"></p>
+<script>
+async function go(){
+  const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pwd.value})})
+  const d=await r.json()
+  if(d.ok) location.href='/admin'
+  else m.innerText='密码错误'
+}
+</script>
+`)
 })
 
-/* ---------- 网页后台 ---------- */
+app.post('/api/login', (req, res) => {
+  if (req.body.password === ADMIN_PASSWORD) {
+    res.cookie('admin', '1', { httpOnly: true })
+    res.json({ ok: true })
+  } else res.json({ ok: false })
+})
 
-app.get('/admin', adminAuth, async (req, res) => {
+/* ===== 后台 ===== */
+
+app.get('/admin', requireAdmin, async (req, res) => {
   const links = await prisma.link.findMany({
-    orderBy: { createdAt: 'desc' }
+    include: { visits: true },
+    orderBy: { id: 'desc' }
   })
 
   const rows = links.map(l => `
-    <tr>
-      <td>${l.id}</td>
-      <td>
-        <a href="/t/${l.token}" target="_blank">打开</a>
-      </td>
-      <td>
-        <a href="/admin/visits/${l.id}">访问记录</a>
-      </td>
-    </tr>
-  `).join('')
+<tr>
+<td>${l.token}</td>
+<td>${l.used ? '已使用' : '未使用'}</td>
+<td>${l.visits.length}</td>
+<td>
+${l.visits.map(v => `
+<div>${v.ip} | ${v.userAgent} | ${v.createdAt}</div>
+`).join('')}
+</td>
+</tr>
+`).join('')
 
   res.send(`
-    <html>
-    <head>
-      <meta charset="utf-8" />
-      <title>后台</title>
-      <style>
-        body { font-family: sans-serif; padding: 40px }
-        table { border-collapse: collapse; margin-top: 20px }
-        td, th { border: 1px solid #ccc; padding: 8px 12px }
-      </style>
-    </head>
-    <body>
-      <h2>一次性链接后台</h2>
+<h1>后台管理</h1>
+<button onclick="gen()">生成一次性链接</button>
+<p id="out"></p>
 
-      <form method="post" action="/admin/create">
-        <button>➕ 生成一次性链接</button>
-      </form>
+<table border="1" cellpadding="5">
+<tr><th>Token</th><th>状态</th><th>次数</th><th>记录</th></tr>
+${rows}
+</table>
 
-      <table>
-        <tr>
-          <th>ID</th>
-          <th>链接</th>
-          <th>记录</th>
-        </tr>
-        ${rows}
-      </table>
-    </body>
-    </html>
-  `)
+<script>
+async function gen(){
+  const r=await fetch('/api/generate',{method:'POST'})
+  const d=await r.json()
+  out.innerText=d.url
+}
+</script>
+`)
 })
 
-app.post('/admin/create', adminAuth, async (req, res) => {
-  const token = generateToken()
+/* ===== 生成链接 ===== */
+
+app.post('/api/generate', requireAdmin, async (req, res) => {
+  const token = genToken()
   await prisma.link.create({ data: { token } })
-  res.redirect('/admin')
+  res.json({
+    url: req.protocol + '://' + req.get('host') + '/t/' + token
+  })
 })
 
-app.get('/admin/visits/:id', adminAuth, async (req, res) => {
-  const visits = await prisma.visit.findMany({
-    where: { linkId: Number(req.params.id) },
-    orderBy: { createdAt: 'desc' }
+/* ===== 追踪入口 ===== */
+
+app.get('/t/:token', async (req, res) => {
+  const link = await prisma.link.findUnique({
+    where: { token: req.params.token }
   })
 
-  const rows = visits.map(v => `
-    <tr>
-      <td>${v.ip}</td>
-      <td>${v.userAgent}</td>
-      <td>${v.createdAt}</td>
-    </tr>
-  `).join('')
+  if (!link || link.used) {
+    return res.send('链接无效或已使用')
+  }
 
-  res.send(`
-    <html>
-    <body>
-      <h3>访问记录</h3>
-      <a href="/admin">返回</a>
-      <table border="1" cellpadding="8">
-        <tr><th>IP</th><th>UA</th><th>时间</th></tr>
-        ${rows || '<tr><td colspan="3">暂无</td></tr>'}
-      </table>
-    </body>
-    </html>
-  `)
+  await prisma.visit.create({
+    data: {
+      ip: getIp(req),
+      userAgent: req.headers['user-agent'] || 'unknown',
+      linkId: link.id
+    }
+  })
+
+  await prisma.link.update({
+    where: { id: link.id },
+    data: { used: true }
+  })
+
+  res.send('访问已记录')
 })
 
 app.listen(PORT, () => {
   console.log('Server running')
-}) 
+})
