@@ -1,50 +1,63 @@
+// server.js  (Node 22 / ESM / 100% 稳定)
+
 import express from 'express'
-import crypto from 'crypto'
 import cookieParser from 'cookie-parser'
-import { PrismaClient } from '@prisma/client'
+import crypto from 'crypto'
+import Database from 'better-sqlite3'
 
 const app = express()
-const prisma = new PrismaClient()
+const PORT = process.env.PORT || 3000
 
 /* ================= 基础配置 ================= */
 
 app.use(express.json())
+app.use(express.urlencoded({ extended: true }))
 app.use(cookieParser())
 
-// Railway / Cloudflare 真实 IP
-app.set('trust proxy', true)
+/* ================= 数据库 ================= */
 
-const PORT = process.env.PORT || 3000
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123'
+const db = new Database('data.db')
 
-// 伪装访问路径（不像 /t/xxx）
-const TRACK_PREFIX = '/go'
+db.exec(`
+CREATE TABLE IF NOT EXISTS links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  slug TEXT UNIQUE,
+  target TEXT,
+  createdAt INTEGER
+);
 
-/* ================= 工具函数 ================= */
+CREATE TABLE IF NOT EXISTS visits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  slug TEXT,
+  ip TEXT,
+  ua TEXT,
+  time INTEGER
+);
 
-function genToken(len = 6) {
-  return crypto.randomBytes(len).toString('base64url')
+CREATE TABLE IF NOT EXISTS admin (
+  id INTEGER PRIMARY KEY,
+  password TEXT
+);
+`)
+
+// 初始化管理员密码
+const defaultPwd = process.env.ADMIN_PASSWORD || 'admin123'
+const hash = s => crypto.createHash('sha256').update(s).digest('hex')
+
+const admin = db.prepare('SELECT * FROM admin WHERE id=1').get()
+if (!admin) {
+  db.prepare('INSERT INTO admin (id,password) VALUES (1,?)')
+    .run(hash(defaultPwd))
 }
 
-function getIp(req) {
-  return (
-    req.headers['cf-connecting-ip'] ||
-    req.headers['x-forwarded-for']?.split(',')[0] ||
-    req.socket.remoteAddress ||
-    'unknown'
-  )
-}
+/* ================= 工具 ================= */
 
-function requireAdmin(req, res, next) {
+const auth = (req, res, next) => {
   if (req.cookies.admin === '1') return next()
   res.redirect('/login')
 }
 
-/* ================= 首页（可有可无） ================= */
-
-app.get('/', (req, res) => {
-  res.send('OK')
-})
+const rand = () => crypto.randomBytes(4).toString('hex')
 
 /* ================= 登录 ================= */
 
@@ -52,125 +65,86 @@ app.get('/login', (req, res) => {
   res.send(`
 <!doctype html>
 <html>
-<head>
-<meta charset="utf-8"/>
-<title>Admin Login</title>
+<head><title>Admin Login</title>
 <style>
-body{font-family:sans-serif;background:#111;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh}
-.box{background:#1e1e1e;padding:30px;border-radius:8px;width:280px}
-input,button{width:100%;padding:10px;margin-top:10px;border-radius:4px;border:none}
-button{background:#4f46e5;color:#fff;cursor:pointer}
-p{color:#f87171}
+body{background:#0f172a;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh}
+input,button{padding:10px;border-radius:6px;border:none}
+button{background:#6366f1;color:#fff}
 </style>
 </head>
 <body>
-<div class="box">
-<h3>Admin Login</h3>
-<input id="pwd" type="password" placeholder="Password"/>
-<button onclick="go()">Login</button>
-<p id="msg"></p>
-</div>
-<script>
-async function go(){
-  const r = await fetch('/api/login',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({password:pwd.value})
-  })
-  const d = await r.json()
-  if(d.ok) location.href='/admin'
-  else msg.innerText='Wrong password'
-}
-</script>
+<form method="post" action="/login">
+  <h2>后台登录</h2>
+  <input name="password" type="password" placeholder="密码" required />
+  <br/><br/>
+  <button>登录</button>
+</form>
 </body>
 </html>
 `)
 })
 
-app.post('/api/login', (req, res) => {
-  if (req.body.password === ADMIN_PASSWORD) {
+app.post('/login', (req, res) => {
+  const row = db.prepare('SELECT password FROM admin WHERE id=1').get()
+  if (hash(req.body.password) === row.password) {
     res.cookie('admin', '1', { httpOnly: true })
-    res.json({ ok: true })
-  } else {
-    res.json({ ok: false })
+    return res.redirect('/admin')
   }
+  res.send('密码错误')
 })
 
 /* ================= 后台 ================= */
 
-app.get('/admin', requireAdmin, async (req, res) => {
-  const links = await prisma.link.findMany({
-    include: { visits: true },
-    orderBy: { id: 'desc' }
-  })
+app.get('/admin', auth, (req, res) => {
+  const links = db.prepare('SELECT * FROM links ORDER BY id DESC').all()
+  const visits = db.prepare('SELECT * FROM visits ORDER BY id DESC').all()
 
   const rows = links.map(l => `
 <tr>
-<td>${l.token}</td>
-<td>${l.used ? '✔' : '—'}</td>
-<td>${l.visits.length}</td>
+<td>${l.slug}</td>
+<td>${l.target}</td>
 <td>
-  ${l.visits.map(v =>
-    `<div style="font-size:12px;color:#aaa">
-      ${v.ip} | ${v.userAgent}
-    </div>`
-  ).join('')}
+<button onclick="copy('${process.env.BASE_URL || ''}/${PATH}/${l.slug}')">复制</button>
 </td>
-</tr>
-`).join('')
+</tr>`).join('')
 
   res.send(`
 <!doctype html>
 <html>
 <head>
-<meta charset="utf-8"/>
-<title>Admin</title>
+<title>后台</title>
 <style>
-body{font-family:sans-serif;background:#0f0f0f;color:#fff;padding:20px}
-h1{margin-bottom:10px}
-button{padding:8px 12px;border:none;border-radius:4px;background:#22c55e;color:#000;cursor:pointer}
-input{padding:8px;width:360px}
-table{width:100%;border-collapse:collapse;margin-top:20px}
-th,td{border:1px solid #333;padding:8px;vertical-align:top}
-th{background:#1f1f1f}
-.copy{background:#3b82f6;color:#fff}
-.msg{color:#22c55e}
+body{background:#020617;color:#e5e7eb;font-family:sans-serif;padding:20px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px;border-bottom:1px solid #1e293b}
+button{padding:6px 10px;border-radius:6px;border:none;background:#6366f1;color:white}
+input{padding:6px}
 </style>
 </head>
 <body>
 
-<h1>IP Link Tracker</h1>
+<h2>生成链接</h2>
+<form method="post" action="/admin/create">
+<input name="target" placeholder="跳转目标 URL" required size="40"/>
+<button>生成</button>
+</form>
 
-<button onclick="gen()">生成新链接</button>
-<br/><br/>
-<input id="link" readonly />
-<button class="copy" onclick="copy()">复制</button>
-<span id="msg" class="msg"></span>
-
+<h2>链接列表</h2>
 <table>
-<tr>
-<th>Token</th>
-<th>已使用</th>
-<th>访问数</th>
-<th>记录</th>
-</tr>
+<tr><th>Slug</th><th>目标</th><th>复制</th></tr>
 ${rows}
 </table>
 
+<h2>修改后台密码</h2>
+<form method="post" action="/admin/password">
+<input name="password" type="password" placeholder="新密码" required/>
+<button>修改</button>
+</form>
+
 <script>
-async function gen(){
-  const r = await fetch('/api/generate',{method:'POST'})
-  const d = await r.json()
-  link.value = d.url
-  msg.innerText = ''
-}
-async function copy(){
-  try{
-    await navigator.clipboard.writeText(link.value)
-    msg.innerText = '✔ 已复制'
-  }catch(e){
-    msg.innerText = '复制失败'
-  }
+function copy(t){
+  navigator.clipboard.writeText(t)
+  alert('已复制')
 }
 </script>
 
@@ -179,54 +153,46 @@ async function copy(){
 `)
 })
 
-/* ================= 生成短链 ================= */
-
-app.post('/api/generate', requireAdmin, async (req, res) => {
-  const token = genToken()
-  await prisma.link.create({
-    data: {
-      token,
-      targetUrl: 'https://example.com', // 可改成你想跳的默认地址
-      used: false
-    }
-  })
-
-  res.json({
-    url: `${req.protocol}://${req.get('host')}${TRACK_PREFIX}/${token}`
-  })
+app.post('/admin/create', auth, (req, res) => {
+  const slug = rand()
+  db.prepare(
+    'INSERT INTO links (slug,target,createdAt) VALUES (?,?,?)'
+  ).run(slug, req.body.target, Date.now())
+  res.redirect('/admin')
 })
 
-/* ================= 追踪入口（无停留，秒跳） ================= */
+app.post('/admin/password', auth, (req, res) => {
+  db.prepare('UPDATE admin SET password=? WHERE id=1')
+    .run(hash(req.body.password))
+  res.send('密码已修改')
+})
 
-app.get(`${TRACK_PREFIX}/:token`, async (req, res) => {
-  const { token } = req.params
+/* ================= 跳转（伪装路径） ================= */
 
-  const link = await prisma.link.findUnique({ where: { token } })
-  if (!link) return res.redirect('https://google.com')
+// 自定义伪装路径（改这里即可）
+const PATH = 'news'   // 例如 /news/xxxx
 
-  // 记录 IP + UA（用户无感）
-  await prisma.visit.create({
-    data: {
-      ip: getIp(req),
-      userAgent: req.headers['user-agent'] || 'unknown',
-      linkId: link.id
-    }
-  })
+app.get(`/${PATH}/:slug`, (req, res) => {
+  const link = db.prepare('SELECT * FROM links WHERE slug=?')
+    .get(req.params.slug)
 
-  // 一次性可用
-  if (!link.used) {
-    await prisma.link.update({
-      where: { id: link.id },
-      data: { used: true }
-    })
-  }
+  if (!link) return res.status(404).end()
 
-  // 立即跳转（0 页面停留）
-  return res.redirect(302, link.targetUrl)
+  db.prepare(
+    'INSERT INTO visits (slug,ip,ua,time) VALUES (?,?,?,?)'
+  ).run(
+    link.slug,
+    req.headers['x-forwarded-for'] || req.socket.remoteAddress,
+    req.headers['user-agent'] || '',
+    Date.now()
+  )
+
+  // 0 停留 302
+  res.redirect(302, link.target)
 })
 
 /* ================= 启动 ================= */
 
 app.listen(PORT, () => {
-  console.log('Server running on port', PORT)
+  console.log('Server running on', PORT)
 })
