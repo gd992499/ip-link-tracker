@@ -3,13 +3,15 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-  "start": "npx prisma db push && node src/server.js"
+    "start": "node src/server.js",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "express-rate-limit": "^7.4.0",
-    "@prisma/client": "^5.9.1",
-    "prisma": "^5.9.1",
-    "cookie-parser": "^1.4.6"
+    "@prisma/client": "^5.8.1",
+    "cookie-parser": "^1.4.6",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "prisma": "^5.8.1"
   }
 }
