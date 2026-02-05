@@ -8,7 +8,9 @@ const prisma = new PrismaClient()
 
 app.use(express.json())
 app.set('trust proxy', true)
-
+app.get("/", (req, res) => {
+  res.send("IP Link Tracker is running");
+});
 const PORT = process.env.PORT || 3000
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD
 
