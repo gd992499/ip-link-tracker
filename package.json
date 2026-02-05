@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "npx prisma migrate deploy && node src/server.js"
+  "start": "npx prisma db push && node src/server.js"
   },
   "dependencies": {
     "express": "^4.19.2",
