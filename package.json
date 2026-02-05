@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
-    "postinstall": "prisma generate"
+    "postinstall": "npx prisma generate && npx prisma migrate deploy"
   },
   "dependencies": {
     "@prisma/client": "^5.9.0",
