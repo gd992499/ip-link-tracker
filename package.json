@@ -1,12 +1,14 @@
 {
   "name": "ip-link-tracker",
-  "version": "1.0.0",
   "type": "module",
+  "version": "1.0.0",
+  "main": "server.js",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node server.js"
   },
   "dependencies": {
-    "@prisma/client": "^5.8.0",
+    "better-sqlite3": "^9.4.0",
+    "cookie-parser": "^1.4.6",
     "express": "^4.19.2"
   }
 }
