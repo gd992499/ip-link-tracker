@@ -1,69 +1,112 @@
 import express from 'express'
-import crypto from 'crypto'
-import cookieParser from 'cookie-parser'
 import { PrismaClient } from '@prisma/client'
+import crypto from 'crypto'
 
 const app = express()
 const prisma = new PrismaClient()
+const PORT = process.env.PORT || 3000
 
 app.use(express.json())
-app.use(cookieParser())
-
-// Railway / Cloudflare
-app.set('trust proxy', true)
-
-const PORT = process.env.PORT || 3000
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123'
 
 /* ================= 工具 ================= */
 
-function genToken() {
-  return crypto.randomBytes(6).toString('base64url')
+function genToken(len = 6) {
+  return crypto.randomBytes(len).toString('hex').slice(0, len)
 }
 
 function getIp(req) {
   return (
-    req.headers['cf-connecting-ip'] ||
     req.headers['x-forwarded-for']?.split(',')[0] ||
     req.socket.remoteAddress ||
     'unknown'
   )
 }
 
-function requireAdmin(req, res, next) {
-  if (req.cookies.admin === '1') return next()
-  return res.redirect('/login')
-}
+/* ================= 跳转入口（伪装路径） ================= */
+/* 看起来 = 正常短链
+   行为 = 立刻 302 跳转
+   无页面 / 无停留 */
 
-/* ================= HTML 模板 ================= */
+app.get('/go/:token', async (req, res) => {
+  const { token } = req.params
 
-function page(title, body) {
-  return `<!doctype html>
+  const link = await prisma.link.findUnique({ where: { token } })
+  if (!link) return res.status(404).send('Not Found')
+
+  // 记录访问
+  await prisma.visit.create({
+    data: {
+      ip: getIp(req),
+      userAgent: req.headers['user-agent'] || 'unknown',
+      linkId: link.id
+    }
+  })
+
+  // 标记已使用（可选）
+  if (!link.used) {
+    await prisma.link.update({
+      where: { id: link.id },
+      data: { used: true }
+    })
+  }
+
+  // 立刻跳转（无提示）
+  return res.redirect(302, link.targetUrl)
+})
+
+/* ================= 后台页面 ================= */
+
+app.get('/admin', async (req, res) => {
+  const links = await prisma.link.findMany({
+    include: { visits: true },
+    orderBy: { createdAt: 'desc' }
+  })
+
+  const rows = links.map(l => `
+    <tr>
+      <td>${l.token}</td>
+      <td>${l.visits.length}</td>
+      <td>
+        <span class="badge ${l.used ? 'used' : 'new'}">
+          ${l.used ? '已使用' : '未使用'}
+        </span>
+      </td>
+      <td>
+        <button onclick="copy('${l.token}')">复制</button>
+      </td>
+    </tr>
+  `).join('')
+
+  res.send(`
+<!doctype html>
 <html lang="zh">
 <head>
-<meta charset="utf-8">
-<title>${title}</title>
+<meta charset="utf-8" />
+<title>IP Link Tracker</title>
 <style>
 body {
-  background:#020617;
-  color:#e5e7eb;
-  font-family:-apple-system,BlinkMacSystemFont;
-  padding:30px;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont;
+  background:#0f1220;
+  color:#eee;
+  margin:0;
 }
-h1 { margin-bottom:10px }
-a { color:#38bdf8; text-decoration:none }
+.container {
+  max-width:900px;
+  margin:40px auto;
+  background:#161a2e;
+  padding:24px;
+  border-radius:12px;
+}
+h1 {
+  margin-top:0;
+}
 button {
-  background:#2563eb;
+  background:#6c7cff;
+  border:none;
+  padding:6px 12px;
+  border-radius:6px;
   color:#fff;
-  border:none;
-  padding:8px 14px;
-  border-radius:6px;
   cursor:pointer;
-}
-input {
-  padding:6px;
-  border-radius:6px;
-  border:none;
 }
 table {
   width:100%;
@@ -71,183 +114,98 @@ table {
   margin-top:20px;
 }
 th,td {
-  border:1px solid #1e293b;
-  padding:8px;
-  vertical-align:top;
-}
-th {
-  background:#020617;
+  padding:10px;
+  border-bottom:1px solid #222;
   text-align:left;
 }
-.visit {
-  font-size:12px;
-  color:#94a3b8;
-  margin-bottom:4px;
+tr:hover {
+  background:#1d2140;
 }
-.small { color:#94a3b8; font-size:12px }
+.badge {
+  padding:3px 8px;
+  border-radius:10px;
+  font-size:12px;
+}
+.badge.new { background:#1f7a1f }
+.badge.used { background:#7a1f1f }
+input {
+  padding:8px;
+  width:60%;
+  border-radius:6px;
+  border:none;
+}
+.msg {
+  margin-left:10px;
+  font-size:13px;
+  opacity:.8;
+}
 </style>
 </head>
 <body>
-${body}
-</body>
-</html>`
-}
+<div class="container">
+  <h1>IP Link Tracker 后台</h1>
 
-/* ================= 首页 ================= */
+  <div>
+    <input id="url" placeholder="目标跳转链接 https://example.com" />
+    <button onclick="gen()">生成</button>
+    <span class="msg" id="msg"></span>
+  </div>
 
-app.get('/', (req, res) => {
-  res.send(
-    page(
-      'IP Link Tracker',
-      `<h1>IP Link Tracker</h1>
-<p class="small">服务运行中</p>
-<a href="/admin">进入后台</a>`
-    )
-  )
-})
-
-/* ================= 登录 ================= */
-
-app.get('/login', (req, res) => {
-  res.send(
-    page(
-      '登录',
-      `<h2>管理员登录</h2>
-<input id="pwd" type="password" placeholder="密码">
-<button onclick="go()">登录</button>
-<p id="msg"></p>
-
-<script>
-async function go(){
-  const r = await fetch('/api/login',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({password:pwd.value})
-  })
-  const d = await r.json()
-  if(d.ok) location.href='/admin'
-  else msg.innerText='密码错误'
-}
-</script>`
-    )
-  )
-})
-
-app.post('/api/login', (req, res) => {
-  if (req.body.password === ADMIN_PASSWORD) {
-    res.cookie('admin', '1', { httpOnly: true })
-    res.json({ ok: true })
-  } else {
-    res.json({ ok: false })
-  }
-})
-
-/* ================= 后台 ================= */
-
-app.get('/admin', requireAdmin, async (req, res) => {
-  const links = await prisma.link.findMany({
-    include: {
-      visits: { orderBy: { createdAt: 'desc' } }
-    },
-    orderBy: { id: 'desc' }
-  })
-
-  const rows = links.map(l => {
-    const visits = l.visits.length
-      ? l.visits.map(v =>
-          `<div class="visit">
-${v.ip} ｜ ${v.userAgent} ｜ ${new Date(v.createdAt).toLocaleString()}
-</div>`
-        ).join('')
-      : '<div class="visit">无</div>'
-
-    return `<tr>
-<td>${l.token}</td>
-<td>${l.targetUrl}</td>
-<td>${l.used ? '是' : '否'}</td>
-<td>${l.visits.length}</td>
-<td>${visits}</td>
-</tr>`
-  }).join('')
-
-  res.send(
-    page(
-      '后台',
-      `<h1>后台管理</h1>
-
-<button onclick="gen()">生成追踪链接</button>
-<p id="out" class="small"></p>
-
-<table>
-<tr>
-<th>Token</th>
-<th>目标地址</th>
-<th>已使用</th>
-<th>访问数</th>
-<th>访问记录</th>
-</tr>
-${rows}
-</table>
+  <table>
+    <tr>
+      <th>Token</th>
+      <th>访问数</th>
+      <th>状态</th>
+      <th>操作</th>
+    </tr>
+    ${rows}
+  </table>
+</div>
 
 <script>
 async function gen(){
-  const r = await fetch('/api/generate',{method:'POST'})
+  const url = document.getElementById('url').value
+  if(!url) return
+  const r = await fetch('/api/generate',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({url})
+  })
   const d = await r.json()
-  out.innerText = d.url
+  await navigator.clipboard.writeText(d.url)
+  msg.innerText = '已生成并复制'
+  location.reload()
 }
-</script>`
-    )
-  )
+
+async function copy(token){
+  const full = location.origin + '/go/' + token
+  await navigator.clipboard.writeText(full)
+  msg.innerText = '已复制 ' + full
+}
+</script>
+</body>
+</html>
+`)
 })
 
-/* ================= 生成链接 ================= */
+/* ================= 生成接口 ================= */
 
-app.post('/api/generate', requireAdmin, async (req, res) => {
+app.post('/api/generate', async (req, res) => {
+  const { url } = req.body
+  if (!url) return res.status(400).json({ error: 'no url' })
+
   const token = genToken()
 
-  const link = await prisma.link.create({
+  await prisma.link.create({
     data: {
       token,
-      targetUrl: 'https://example.com'
+      targetUrl: url
     }
   })
 
   res.json({
-    url: req.protocol + '://' + req.get('host') + '/t/' + link.token
+    url: `${req.protocol}://${req.get('host')}/go/${token}`
   })
-})
-
-/* ================= 无感知追踪入口 ================= */
-
-app.get('/t/:token', async (req, res) => {
-  const link = await prisma.link.findUnique({
-    where: { token: req.params.token }
-  })
-
-  if (!link) {
-    // 表现和普通短链一致
-    return res.status(404).end()
-  }
-
-  // 先记录（用户无感知）
-  prisma.visit.create({
-    data: {
-      ip: getIp(req),
-      userAgent: req.headers['user-agent'] || 'unknown',
-      linkId: link.id
-    }
-  }).catch(()=>{})
-
-  // 可选：一次性
-  if (!link.used) {
-    prisma.link.update({
-      where: { id: link.id },
-      data: { used: true }
-    }).catch(()=>{})
-  }
-
-  // 立刻跳转（关键）
-  return res.redirect(302, link.targetUrl)
 })
 
 /* ================= 启动 ================= */
