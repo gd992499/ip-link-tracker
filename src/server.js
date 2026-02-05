@@ -70,14 +70,47 @@ app.post('/api/login', (req, res) => {
 })
 
 /* ===== 后台 ===== */
-
 app.get('/admin', requireAdmin, async (req, res) => {
   const links = await prisma.link.findMany({
-    include: { visits: true },
     orderBy: { id: 'desc' }
   })
 
-  const rows = links.map(l => `
+  let html = `
+  <h1>后台管理</h1>
+  <button onclick="gen()">生成一次性链接</button>
+  <p id="out"></p>
+  <hr/>
+  `
+
+  for (const l of links) {
+    const visits = await prisma.visit.findMany({
+      where: { linkId: l.id },
+      orderBy: { id: 'desc' }
+    })
+
+    html += `
+    <div style="border:1px solid #ccc;padding:8px;margin:8px 0">
+      <b>Token:</b> ${l.token}<br/>
+      <b>访问次数:</b> ${visits.length}<br/>
+      ${visits.map(v =>
+        `<div>${v.ip} | ${v.userAgent} | ${v.createdAt}</div>`
+      ).join('')}
+    </div>
+    `
+  }
+
+  html += `
+  <script>
+  async function gen(){
+    const r = await fetch('/api/generate',{method:'POST'})
+    const d = await r.json()
+    out.innerText = d.url
+  }
+  </script>
+  `
+
+  res.send(html)
+})
 <tr>
 <td>${l.token}</td>
 <td>${l.used ? '已使用' : '未使用'}</td>
