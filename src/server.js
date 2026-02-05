@@ -1,14 +1,18 @@
-// server.js  (Node 22 / ESM / 100% 稳定)
+// server.js  (Node 22 / ESM / Railway 稳定)
 
 import express from 'express'
 import cookieParser from 'cookie-parser'
 import crypto from 'crypto'
 import Database from 'better-sqlite3'
 
+/* ================= 基础 ================= */
+
 const app = express()
 const PORT = process.env.PORT || 3000
+const PATH = 'news' // 伪装路径
+const BASE_URL = process.env.BASE_URL || ''
 
-/* ================= 基础配置 ================= */
+app.set('trust proxy', true)
 
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }))
@@ -40,9 +44,10 @@ CREATE TABLE IF NOT EXISTS admin (
 );
 `)
 
-// 初始化管理员密码
-const defaultPwd = process.env.ADMIN_PASSWORD || 'admin123'
+/* ================= 管理员初始化 ================= */
+
 const hash = s => crypto.createHash('sha256').update(s).digest('hex')
+const defaultPwd = process.env.ADMIN_PASSWORD || 'admin123'
 
 const admin = db.prepare('SELECT * FROM admin WHERE id=1').get()
 if (!admin) {
@@ -65,19 +70,12 @@ app.get('/login', (req, res) => {
   res.send(`
 <!doctype html>
 <html>
-<head><title>Admin Login</title>
-<style>
-body{background:#0f172a;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh}
-input,button{padding:10px;border-radius:6px;border:none}
-button{background:#6366f1;color:#fff}
-</style>
-</head>
-<body>
-<form method="post" action="/login">
-  <h2>后台登录</h2>
-  <input name="password" type="password" placeholder="密码" required />
-  <br/><br/>
-  <button>登录</button>
+<body style="background:#020617;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh">
+<form method="post">
+<h2>后台登录</h2>
+<input name="password" type="password" required />
+<br/><br/>
+<button>登录</button>
 </form>
 </body>
 </html>
@@ -97,67 +95,47 @@ app.post('/login', (req, res) => {
 
 app.get('/admin', auth, (req, res) => {
   const links = db.prepare('SELECT * FROM links ORDER BY id DESC').all()
-  const visits = db.prepare('SELECT * FROM visits ORDER BY id DESC').all()
 
   const rows = links.map(l => `
 <tr>
 <td>${l.slug}</td>
 <td>${l.target}</td>
 <td>
-<button onclick="copy('${process.env.BASE_URL || ''}/${PATH}/${l.slug}')">复制</button>
+<button onclick="copy('${BASE_URL}/${PATH}/${l.slug}')">复制</button>
 </td>
 </tr>`).join('')
 
   res.send(`
 <!doctype html>
 <html>
-<head>
-<title>后台</title>
-<style>
-body{background:#020617;color:#e5e7eb;font-family:sans-serif;padding:20px}
-table{width:100%;border-collapse:collapse}
-th,td{padding:10px;border-bottom:1px solid #1e293b}
-button{padding:6px 10px;border-radius:6px;border:none;background:#6366f1;color:white}
-input{padding:6px}
-</style>
-</head>
-<body>
-
+<body style="background:#020617;color:#e5e7eb;padding:20px">
 <h2>生成链接</h2>
 <form method="post" action="/admin/create">
-<input name="target" placeholder="跳转目标 URL" required size="40"/>
+<input name="target" required size="40"/>
 <button>生成</button>
 </form>
 
-<h2>链接列表</h2>
-<table>
-<tr><th>Slug</th><th>目标</th><th>复制</th></tr>
-${rows}
-</table>
+<h2>链接</h2>
+<table>${rows}</table>
 
-<h2>修改后台密码</h2>
+<h2>修改密码</h2>
 <form method="post" action="/admin/password">
-<input name="password" type="password" placeholder="新密码" required/>
+<input name="password" type="password" required/>
 <button>修改</button>
 </form>
 
 <script>
-function copy(t){
-  navigator.clipboard.writeText(t)
-  alert('已复制')
-}
+function copy(t){navigator.clipboard.writeText(t);alert('已复制')}
 </script>
-
 </body>
 </html>
 `)
 })
 
 app.post('/admin/create', auth, (req, res) => {
-  const slug = rand()
   db.prepare(
     'INSERT INTO links (slug,target,createdAt) VALUES (?,?,?)'
-  ).run(slug, req.body.target, Date.now())
+  ).run(rand(), req.body.target, Date.now())
   res.redirect('/admin')
 })
 
@@ -167,31 +145,23 @@ app.post('/admin/password', auth, (req, res) => {
   res.send('密码已修改')
 })
 
-/* ================= 跳转（伪装路径） ================= */
-
-// 自定义伪装路径（改这里即可）
-const PATH = 'news'   // 例如 /news/xxxx
+/* ================= 跳转 ================= */
 
 app.get(`/${PATH}/:slug`, (req, res) => {
   const link = db.prepare('SELECT * FROM links WHERE slug=?')
     .get(req.params.slug)
 
-  if (!link) return res.status(404).end()
+  if (!link) return res.sendStatus(404)
+
+  const ip = (req.headers['x-forwarded-for'] || req.ip || '')
+    .toString().split(',')[0]
 
   db.prepare(
     'INSERT INTO visits (slug,ip,ua,time) VALUES (?,?,?,?)'
-  ).run(
-    link.slug,
-    req.headers['x-forwarded-for'] || req.socket.remoteAddress,
-    req.headers['user-agent'] || '',
-    Date.now()
-  )
+  ).run(link.slug, ip, req.headers['user-agent'] || '', Date.now())
 
-  // 0 停留 302
   res.redirect(302, link.target)
 })
-
-/* ================= 启动 ================= */
 
 app.listen(PORT, () => {
   console.log('Server running on', PORT)
