@@ -25,6 +25,39 @@ app.get("/", (req, res) => {
     </html>
   `)
 })
+app.get("/admin", (req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8")
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+      <meta charset="UTF-8" />
+      <title>后台 - IP Link Tracker</title>
+    </head>
+    <body>
+      <h1>后台管理</h1>
+
+      <button onclick="generate()">生成一次性追踪链接</button>
+
+      <p id="result"></p>
+
+      <script>
+        async function generate() {
+          const res = await fetch('/api/generate', { method: 'POST' })
+          const data = await res.json()
+          document.getElementById('result').innerText = data.url
+        }
+      </script>
+    </body>
+    </html>
+  `)
+})
+app.post("/api/generate", (req, res) => {
+  const token = generateToken()
+  res.json({
+    url: req.protocol + '://' + req.get('host') + '/t/' + token
+  })
+})
 const PORT = process.env.PORT || 3000
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD
 
