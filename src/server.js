@@ -6,17 +6,24 @@ import { PrismaClient } from '@prisma/client'
 const app = express()
 const prisma = new PrismaClient()
 
+/* ================= 基础配置 ================= */
+
 app.use(express.json())
 app.use(cookieParser())
+
+// Railway / Cloudflare 真实 IP
 app.set('trust proxy', true)
 
 const PORT = process.env.PORT || 3000
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123'
 
-/* ================= 工具 ================= */
+// 伪装访问路径（不像 /t/xxx）
+const TRACK_PREFIX = '/go'
 
-function genToken() {
-  return crypto.randomBytes(6).toString('base64url')
+/* ================= 工具函数 ================= */
+
+function genToken(len = 6) {
+  return crypto.randomBytes(len).toString('base64url')
 }
 
 function getIp(req) {
@@ -29,14 +36,14 @@ function getIp(req) {
 }
 
 function requireAdmin(req, res, next) {
-  if (req.cookies.admin === '1') next()
-  else res.redirect('/login')
+  if (req.cookies.admin === '1') return next()
+  res.redirect('/login')
 }
 
-/* ================= 首页（伪装） ================= */
+/* ================= 首页（可有可无） ================= */
 
 app.get('/', (req, res) => {
-  res.status(404).send('Not Found')
+  res.send('OK')
 })
 
 /* ================= 登录 ================= */
@@ -46,13 +53,13 @@ app.get('/login', (req, res) => {
 <!doctype html>
 <html>
 <head>
-<meta charset="utf-8">
-<title>Login</title>
+<meta charset="utf-8"/>
+<title>Admin Login</title>
 <style>
-body{background:#0f172a;color:#e5e7eb;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh}
-.box{background:#020617;padding:30px;border-radius:10px;width:260px}
-input,button{width:100%;padding:10px;margin-top:10px;border-radius:6px;border:none}
-button{background:#6366f1;color:#fff}
+body{font-family:sans-serif;background:#111;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh}
+.box{background:#1e1e1e;padding:30px;border-radius:8px;width:280px}
+input,button{width:100%;padding:10px;margin-top:10px;border-radius:4px;border:none}
+button{background:#4f46e5;color:#fff;cursor:pointer}
 p{color:#f87171}
 </style>
 </head>
@@ -61,7 +68,7 @@ p{color:#f87171}
 <h3>Admin Login</h3>
 <input id="pwd" type="password" placeholder="Password"/>
 <button onclick="go()">Login</button>
-<p id="m"></p>
+<p id="msg"></p>
 </div>
 <script>
 async function go(){
@@ -72,7 +79,7 @@ async function go(){
   })
   const d = await r.json()
   if(d.ok) location.href='/admin'
-  else m.innerText='Wrong password'
+  else msg.innerText='Wrong password'
 }
 </script>
 </body>
@@ -103,9 +110,11 @@ app.get('/admin', requireAdmin, async (req, res) => {
 <td>${l.used ? '✔' : '—'}</td>
 <td>${l.visits.length}</td>
 <td>
-${l.visits.map(v =>
-  `<div class="v">${v.ip}<br><small>${v.userAgent}</small></div>`
-).join('')}
+  ${l.visits.map(v =>
+    `<div style="font-size:12px;color:#aaa">
+      ${v.ip} | ${v.userAgent}
+    </div>`
+  ).join('')}
 </td>
 </tr>
 `).join('')
@@ -114,36 +123,36 @@ ${l.visits.map(v =>
 <!doctype html>
 <html>
 <head>
-<meta charset="utf-8">
+<meta charset="utf-8"/>
 <title>Admin</title>
 <style>
-body{background:#020617;color:#e5e7eb;font-family:sans-serif;padding:20px}
+body{font-family:sans-serif;background:#0f0f0f;color:#fff;padding:20px}
 h1{margin-bottom:10px}
-button{background:#6366f1;color:#fff;border:none;padding:8px 14px;border-radius:6px}
-table{width:100%;border-collapse:collapse;margin-top:15px}
-th,td{border-bottom:1px solid #1e293b;padding:8px;text-align:left;vertical-align:top}
-th{color:#93c5fd}
-.v{background:#020617;border:1px solid #1e293b;padding:6px;margin:4px 0;border-radius:6px}
-input{padding:8px;width:320px}
-.msg{color:#22c55e;margin-left:10px}
+button{padding:8px 12px;border:none;border-radius:4px;background:#22c55e;color:#000;cursor:pointer}
+input{padding:8px;width:360px}
+table{width:100%;border-collapse:collapse;margin-top:20px}
+th,td{border:1px solid #333;padding:8px;vertical-align:top}
+th{background:#1f1f1f}
+.copy{background:#3b82f6;color:#fff}
+.msg{color:#22c55e}
 </style>
 </head>
 <body>
 
 <h1>IP Link Tracker</h1>
 
-<button onclick="gen()">Generate Link</button>
-<br><br>
-<input id="link" readonly>
-<button onclick="copy()">Copy</button>
-<span class="msg" id="msg"></span>
+<button onclick="gen()">生成新链接</button>
+<br/><br/>
+<input id="link" readonly />
+<button class="copy" onclick="copy()">复制</button>
+<span id="msg" class="msg"></span>
 
 <table>
 <tr>
 <th>Token</th>
-<th>Used</th>
-<th>Visits</th>
-<th>Records</th>
+<th>已使用</th>
+<th>访问数</th>
+<th>记录</th>
 </tr>
 ${rows}
 </table>
@@ -158,9 +167,9 @@ async function gen(){
 async function copy(){
   try{
     await navigator.clipboard.writeText(link.value)
-    msg.innerText='Copied'
-  }catch{
-    msg.innerText='Failed'
+    msg.innerText = '✔ 已复制'
+  }catch(e){
+    msg.innerText = '复制失败'
   }
 }
 </script>
@@ -170,34 +179,32 @@ async function copy(){
 `)
 })
 
-/* ================= 生成链接 ================= */
+/* ================= 生成短链 ================= */
 
 app.post('/api/generate', requireAdmin, async (req, res) => {
   const token = genToken()
-  const link = await prisma.link.create({
+  await prisma.link.create({
     data: {
       token,
-      targetUrl: 'https://example.com',
+      targetUrl: 'https://example.com', // 可改成你想跳的默认地址
       used: false
     }
   })
 
   res.json({
-    url: req.protocol + '://' + req.get('host') + '/r/' + token
+    url: `${req.protocol}://${req.get('host')}${TRACK_PREFIX}/${token}`
   })
 })
 
-/* ================= 追踪入口（核心） ================= */
+/* ================= 追踪入口（无停留，秒跳） ================= */
 
-app.get('/r/:token', async (req, res) => {
-  const link = await prisma.link.findUnique({
-    where: { token: req.params.token }
-  })
+app.get(`${TRACK_PREFIX}/:token`, async (req, res) => {
+  const { token } = req.params
 
-  if (!link) {
-    return res.redirect('https://example.com')
-  }
+  const link = await prisma.link.findUnique({ where: { token } })
+  if (!link) return res.redirect('https://google.com')
 
+  // 记录 IP + UA（用户无感）
   await prisma.visit.create({
     data: {
       ip: getIp(req),
@@ -206,6 +213,7 @@ app.get('/r/:token', async (req, res) => {
     }
   })
 
+  // 一次性可用
   if (!link.used) {
     await prisma.link.update({
       where: { id: link.id },
@@ -213,11 +221,12 @@ app.get('/r/:token', async (req, res) => {
     })
   }
 
+  // 立即跳转（0 页面停留）
   return res.redirect(302, link.targetUrl)
 })
 
 /* ================= 启动 ================= */
 
 app.listen(PORT, () => {
-  console.log('Server running on ' + PORT)
+  console.log('Server running on port', PORT)
 })
