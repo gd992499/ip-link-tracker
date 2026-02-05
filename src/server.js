@@ -9,8 +9,22 @@ const prisma = new PrismaClient()
 app.use(express.json())
 app.set('trust proxy', true)
 app.get("/", (req, res) => {
-  res.send("IP Link Tracker is running");
-});
+  res.setHeader("Content-Type", "text/html; charset=utf-8")
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+    <head>
+      <meta charset="UTF-8" />
+      <title>IP Link Tracker</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    </head>
+    <body>
+      <h1>IP Link Tracker</h1>
+      <p>HTML 首页已加载</p>
+    </body>
+    </html>
+  `)
+})
 const PORT = process.env.PORT || 3000
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD
 
