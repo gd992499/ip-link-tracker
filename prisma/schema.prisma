@@ -10,13 +10,16 @@ datasource db {
 model Link {
   id        Int      @id @default(autoincrement())
   token     String   @unique
+  used      Boolean  @default(false)
   createdAt DateTime @default(now())
+  visits    Visit[]
 }
 
 model Visit {
   id        Int      @id @default(autoincrement())
-  linkId    Int
   ip        String
   userAgent String
   createdAt DateTime @default(now())
-} 
+  link      Link     @relation(fields: [linkId], references: [id])
+  linkId    Int
+}
